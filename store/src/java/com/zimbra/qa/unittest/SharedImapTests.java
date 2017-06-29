@@ -1537,47 +1537,104 @@ public abstract class SharedImapTests extends ImapTestBase {
         return null;
     }
 
-    @Test(timeout=10000)
-    public void copyFromSharedFolder() throws IOException, ServiceException, MessagingException {
+    /** Mountpoints created in the classic ZWC way where a folder is shared and the share is accepted
+     *  do not appear in the main list of folders.  They should however, be available under the /home hierarchy.
+     */
+    @Test(timeout=1000000)
+    public void copyFromMountpointUsingHomeNaming() throws IOException, ServiceException, MessagingException {
+        TestUtil.createAccount(SHAREE);
+        ZMailbox shareeZmbox = TestUtil.getZMailbox(SHAREE);
+        ZMailbox mbox = TestUtil.getZMailbox(USER);
+        String sharedFolderName = String.format("INBOX/%s-shared", testId);
+        String remoteFolderPath = "/" + sharedFolderName;
+        ZFolder remoteFolder = TestUtil.createFolder(mbox, remoteFolderPath);
+        String mountpointName = String.format(testId + "-ForSharee");
+        TestUtil.createMountpoint(mbox, remoteFolderPath, shareeZmbox, mountpointName);
+        String subject = String.format("%s-missiveSubject", testInfo.getMethodName());
+        TestUtil.addMessage(mbox, subject, remoteFolder.getId());
+        connection = connectAndSelectInbox();
+        connection.select(sharedFolderName);
+        Map<Long, MessageData> mdMap = connection.fetch("1:*", "(ENVELOPE)");
+        assertEquals("Size of map returned by fetch", 1, mdMap.size());
+        connection.logout();
+        String remFolder = String.format("/home/%s/%s", USER, sharedFolderName);
+        String copyToFolder = "INBOX/copy-to";
+        doCopy(otherConnection, shareeZmbox, remFolder, copyToFolder, subject);
+    }
+
+    @Test(timeout=1000000)
+    public void copyFromMountpointUsingMountpointNaming() throws IOException, ServiceException, MessagingException {
+        TestUtil.createAccount(SHAREE);
+        ZMailbox shareeZmbox = TestUtil.getZMailbox(SHAREE);
+        ZMailbox mbox = TestUtil.getZMailbox(USER);
+        String sharedFolderName = String.format("INBOX/%s-shared", testId);
+        String remoteFolderPath = "/" + sharedFolderName;
+        ZFolder remoteFolder = TestUtil.createFolder(mbox, remoteFolderPath);
+        String mountpointName = String.format(testId + "-ForSharee");
+        TestUtil.createMountpoint(mbox, remoteFolderPath, shareeZmbox, mountpointName);
+        String subject = String.format("%s-missiveSubject", testInfo.getMethodName());
+        TestUtil.addMessage(mbox, subject, remoteFolder.getId());
+        connection = connectAndSelectInbox();
+        connection.select(sharedFolderName);
+        Map<Long, MessageData> mdMap = connection.fetch("1:*", "(ENVELOPE)");
+        assertEquals("Size of map returned by fetch", 1, mdMap.size());
+        connection.logout();
+        String copyToFolder = "INBOX/copy-to";
+        doCopy(otherConnection, shareeZmbox, mountpointName, copyToFolder, subject);
+    }
+
+    @Test(timeout=1000000)
+    public void copyFromSharedFolderViaHome() throws IOException, ServiceException, MessagingException {
         TestUtil.createAccount(SHAREE);
         ZMailbox shareeZmbox = TestUtil.getZMailbox(SHAREE);
         connection = connectAndSelectInbox();
-        connection.create("INBOX/share");
-        connection.setacl("INBOX/share", SHAREE, "lrswickxteda");
+        String sharedFolderName = String.format("INBOX/%s-shared", testId);
+        connection.create(sharedFolderName);
+        connection.setacl(sharedFolderName, SHAREE, "lrswickxteda");
         String subject = String.format("%s-missiveSubject", testInfo.getMethodName());
         String bodyStr = String.format("test message body for %s", testInfo.getMethodName());
         String part1 = simpleMessage(subject, bodyStr);
         String part2 = "more text\r\n";
         AppendMessage am = new AppendMessage(null, null, literal(part1), literal(part2));
-        AppendResult res = connection.append("INBOX/share", am);
-        assertNotNull("Append result to INBOX/share", res);
+        AppendResult res = connection.append(sharedFolderName, am);
+        assertNotNull(String.format("Append result to folder %s", sharedFolderName), res);
+        connection.select(sharedFolderName);
+        Map<Long, MessageData> mdMap = connection.fetch("1:*", "(ENVELOPE)");
+        assertEquals("Size of map returned by fetch", 1, mdMap.size());
         connection.logout();
-        String remFolder = String.format("/home/%s/INBOX/share", USER);
+        String remFolder = String.format("/home/%s/%s", USER, sharedFolderName);
         String copyToFolder = "INBOX/copy-to";
-        otherConnection = connectAndSelectInbox(SHAREE);
-        otherConnection.create(copyToFolder);
+        doCopy(otherConnection, shareeZmbox, remFolder, copyToFolder, subject);
+    }
+
+    private void doCopy(ImapConnection imapConn, ZMailbox shareeZmbox, String fromFolderName,
+            String toFolderName, String srcMsgSubject)
+    throws IOException, ServiceException, MessagingException {
+        imapConn = connectAndSelectInbox(SHAREE);
+        imapConn.list("", "*");
+        imapConn.create(toFolderName);
         // This loop is to create some distance between the IDs in the from and to mailboxes
         for (int cnt =1;cnt < 10;cnt++) {
             TestUtil.addMessage(shareeZmbox, String.format("inbox msg %s", cnt));
         }
-        otherConnection.select(remFolder);
-        CopyResult copyResult = otherConnection.copy("1", copyToFolder);
+        imapConn.select(fromFolderName);
+        CopyResult copyResult = imapConn.copy("1", toFolderName);
         assertNotNull("copyResult.getFromUids()", copyResult.getFromUids());
         assertNotNull("copyResult.getToUids()", copyResult.getToUids());
         assertEquals("Number of fromUIDs", 1, copyResult.getFromUids().length);
         assertEquals("Number of toUIDs", 1, copyResult.getToUids().length);
-        MailboxInfo selectMboxInfo = otherConnection.select(copyToFolder);
-        assertNotNull(String.format("Select result for folder=%s", copyToFolder), selectMboxInfo);
-        assertEquals("Select result Folder Name folder", copyToFolder, selectMboxInfo.getName());
-        assertEquals(String.format("Number of exists for folder=%s after copy", copyToFolder),
+        MailboxInfo selectMboxInfo = imapConn.select(toFolderName);
+        assertNotNull(String.format("Select result for folder=%s", toFolderName), selectMboxInfo);
+        assertEquals("Select result Folder Name folder", toFolderName, selectMboxInfo.getName());
+        assertEquals(String.format("Number of exists for folder=%s after copy", toFolderName),
                 1, selectMboxInfo.getExists());
-        Map<Long, MessageData> mdMap = otherConnection.fetch("1:*", "(ENVELOPE)");
+        Map<Long, MessageData> mdMap = imapConn.fetch("1:*", "(ENVELOPE)");
         assertEquals("Size of map returned by fetch", 1, mdMap.size());
         MessageData md = mdMap.values().iterator().next();
         assertNotNull("MessageData should not be null", md);
         Envelope env = md.getEnvelope();
         assertNotNull("Envelope should not be null", env);
-        assertEquals("Subject from envelope is wrong", subject, env.getSubject());
+        assertEquals("Subject from envelope is wrong", srcMsgSubject, env.getSubject());
         assertNull("Internal date was NOT requested and should be NULL", md.getInternalDate());
         BodyStructure bs = md.getBodyStructure();
         assertNull("Body Structure was not requested and should be NULL", bs);
